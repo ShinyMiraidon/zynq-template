@@ -37,6 +37,17 @@ UBOOT_BUILD   = $(OUT)/$(BOARD)/u-boot
 VIVADO_BUILD ?= $(OUT)/$(BOARD)/vivado
 SDK_BUILD     = $(OUT)/$(BOARD)/sdk
 
+HOST_EXTRACFLAGS ?= -fcommon
+UBOOT_HOST_EXTRACFLAGS ?= $(HOST_EXTRACFLAGS)
+LINUX_HOST_EXTRACFLAGS ?= $(HOST_EXTRACFLAGS)
+UBOOT_BOOTCOMMAND ?= $(UBOOT_BOOTCOMMAND_$(BOARD))
+UBOOT_BOOTCOMMAND_zcu102 ?= run sdboot
+UBOOT_BOOTCOMMAND_zcu106 ?= run sdboot
+
+ZYNQMP_BOOTARGS_EXTRA ?= $(ZYNQMP_BOOTARGS_EXTRA_$(BOARD))
+ZYNQMP_BOOTARGS_EXTRA_zcu102 ?= maxcpus=1
+ZYNQMP_BOOTARGS_EXTRA_zcu106 ?= maxcpus=1
+
 
 # ZYNQ 7-series
 ifneq ($(findstring zc7, $(BOARD)),)
@@ -84,12 +95,17 @@ all: sd-card
 $(UBOOT_BUILD)/.config:
 	@echo "=== $(BOARD): configuring u-boot ==="
 	@mkdir -p $(UBOOT_BUILD)
-	@KBUILD_OUTPUT=$(UBOOT_BUILD) ARCH=$(UBOOT_ARCH) CROSS_COMPILE=$(CROSS_COMPILE) $(MAKE) -C u-boot-xlnx $(UBOOT_DEFCONFIG)
-	@sed -i 's/run distro_bootcmd/run sdboot/g' $@
+	@KBUILD_OUTPUT=$(UBOOT_BUILD) ARCH=$(UBOOT_ARCH) CROSS_COMPILE=$(CROSS_COMPILE) HOST_EXTRACFLAGS="$(UBOOT_HOST_EXTRACFLAGS)" $(MAKE) -C u-boot-xlnx $(UBOOT_DEFCONFIG)
+	@if [ "$(UBOOT_BOOTCOMMAND)" != "" ]; then \
+		sed -i.bak 's/^CONFIG_BOOTCOMMAND=.*/CONFIG_BOOTCOMMAND="$(UBOOT_BOOTCOMMAND)"/' $@; \
+		rm -f $@.bak; \
+	else \
+		sed -i 's/run distro_bootcmd/run sdboot/g' $@; \
+	fi
 
 $(UBOOT_BUILD)/u-boot.elf: $(UBOOT_BUILD)/.config
 	@echo "=== $(BOARD): building u-boot ==="
-	@KBUILD_OUTPUT=$(UBOOT_BUILD) ARCH=$(UBOOT_ARCH) CROSS_COMPILE=$(CROSS_COMPILE) $(MAKE) -C u-boot-xlnx
+	@KBUILD_OUTPUT=$(UBOOT_BUILD) ARCH=$(UBOOT_ARCH) CROSS_COMPILE=$(CROSS_COMPILE) HOST_EXTRACFLAGS="$(UBOOT_HOST_EXTRACFLAGS)" $(MAKE) -C u-boot-xlnx
 
 
 u-boot: $(UBOOT_BUILD)/u-boot.elf
@@ -104,13 +120,13 @@ clean-u-boot:
 $(LINUX_BUILD)/.config:
 	@echo "=== $(BOARD): configuring Linux ==="
 	@mkdir -p $(LINUX_BUILD)
-	@KSRC=linux-xlnx ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) $(MAKE) O=$(LINUX_BUILD) -C linux-xlnx $(LINUX_DEFCONFIG)
+	@KSRC=linux-xlnx ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) HOST_EXTRACFLAGS="$(LINUX_HOST_EXTRACFLAGS)" $(MAKE) O=$(LINUX_BUILD) -C linux-xlnx $(LINUX_DEFCONFIG)
 
 
 $(LINUX_BUILD)/arch/$(ARCH)/boot/$(LINUX_IMAGE): $(LINUX_BUILD)/.config $(UBOOT_BUILD)/u-boot.elf
 	@echo "=== $(BOARD): building Linux ==="
 	@rm -f $@
-	@PATH=$(UBOOT_BUILD)/tools:$(PATH) KSRC=linux-xlnx ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) $(MAKE) -C $(LINUX_BUILD) $(LINUX_OPT) $(LINUX_TARGET)
+	@PATH=$(UBOOT_BUILD)/tools:$(PATH) KSRC=linux-xlnx ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) HOST_EXTRACFLAGS="$(LINUX_HOST_EXTRACFLAGS)" $(MAKE) -C $(LINUX_BUILD) $(LINUX_OPT) $(LINUX_TARGET)
 
 
 linux: $(LINUX_BUILD)/arch/$(ARCH)/boot/$(LINUX_IMAGE)
@@ -229,6 +245,10 @@ $(SD-CARD)/boot/uEnv.txt:
 	@echo "=== $(BOARD): generating uEnv.txt ==="
 	@mkdir -p $(SD-CARD)/boot
 	@cp $(SCRIPTS)/uEnv_zynqmp.txt $@
+	@if [ "$(ZYNQMP_BOOTARGS_EXTRA)" != "" ]; then \
+		sed -i.bak 's/^bootargs=.*/& $(ZYNQMP_BOOTARGS_EXTRA)/' $@; \
+		rm -f $@.bak; \
+	fi;
 	@if [ "$(ETHADDR)" != "" ]; then \
 		echo "ethaddr=$(ETHADDR)" >> $@; \
 	fi;
@@ -311,6 +331,10 @@ $(SDK_BUILD)/dt/system-top.dts:  $(SDK_BUILD)/$(TOP).hdf
 
 $(SDK_BUILD)/dt/system.dts.tmp: $(SDK_BUILD)/dt/system-top.dts
 	$(QUIET_BUILD) gcc -I $(SDK_BUILD)/include -E -nostdinc -undef -D__DTS__ -x assembler-with-cpp -o $@ $<
+	@if [ "$(filter zcu102 zcu106,$(BOARD))" != "" ] && ! grep -q 'disable-wp;' $@; then \
+		echo "=== $(BOARD): disabling SD write-protect in device tree ==="; \
+		printf '\n&sdhci1 {\n\tdisable-wp;\n};\n' >> $@; \
+	fi
 
 $(SDK_BUILD)/dt/system.dtb: $(SDK_BUILD)/dt/system.dts.tmp
 	@echo "=== $(BOARD): compiling device tree ==="
@@ -379,4 +403,3 @@ clean-all:
 
 
 .PHONY: clean distclean clean-all
-

@@ -3,7 +3,8 @@ bitstream_present_test=test -e mmc $sdbootdev:$partid /bitstream.bin
 dtb_present_test=test -e mmc $sdbootdev:$partid /system.dtb
 linux_present_test=test -e mmc $sdbootdev:$partid /Image
 fpga_load=if run bitstream_present_test; then load mmc $sdbootdev:$partid 0x10000000 bitstream.bin && fpga load 0 0x10000000 ${filesize}; fi
+fpga_load_if_needed=if test x$modeboot = xjtagboot; then echo Skipping FPGA load in JTAG boot mode; else run fpga_load; fi
 dtb_load=if run dtb_present_test; then load mmc $sdbootdev:$partid $fdt_addr system.dtb; fi
 linux_load=if run linux_present_test; then load mmc $sdbootdev:$partid $kernel_addr Image; fi
 custom_boot=booti $kernel_addr - $fdt_addr
-uenvcmd=run fpga_load; run dtb_load; run linux_load; run custom_boot
+uenvcmd=run fpga_load_if_needed; run dtb_load; run linux_load; run custom_boot
